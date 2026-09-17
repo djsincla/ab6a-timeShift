@@ -1,0 +1,72 @@
+#!/bin/bash
+#
+# timeshift-resign — make an injectable copy of a hardened-runtime .app.
+#
+#   timeshift-resign <source.app> <dest.app>
+#
+# Copies the bundle, then re-signs every Mach-O in it ad-hoc with
+# com.apple.security.cs.disable-library-validation, so DYLD_INSERT_LIBRARIES
+# is honoured. Existing entitlements are preserved.
+#
+# This always works on a copy. It never modifies the source, because
+# re-signing invalidates notarization and resets the app's TCC grants
+# (microphone, camera, automation), which you do not want to do to an app you
+# rely on.
+#
+set -euo pipefail
+
+die() { echo "timeshift-resign: $*" >&2; exit 1; }
+
+[[ $# -eq 2 ]] || { sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+
+src="$1"; dst="$2"
+[[ -d "$src" ]] || die "$src is not a bundle"
+[[ "$src" != "$dst" ]] || die "refusing to re-sign in place; give a different destination"
+[[ -e "$dst" ]] && die "$dst already exists — remove it first"
+
+ents="$(mktemp -t timeshift-ents).plist"
+trap 'rm -f "$ents"' EXIT
+
+# Start from the app's own entitlements so capabilities like audio-input survive.
+# Note: plain `--entitlements -` prints a human-readable [Key] dump on current
+# macOS, which is not a plist; `--xml` is what yields something plutil can read.
+if codesign -d --entitlements - --xml "$src" 2>/dev/null | grep -q '<key>'; then
+	codesign -d --entitlements - --xml "$src" 2>/dev/null > "$ents" \
+	    || die "could not read entitlements from $src"
+	plutil -convert xml1 "$ents" >/dev/null || die "entitlements from $src are not a valid plist"
+else
+	printf '%s' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>' > "$ents"
+	plutil -convert xml1 "$ents" >/dev/null
+fi
+/usr/libexec/PlistBuddy -c \
+	'Add :com.apple.security.cs.disable-library-validation bool true' "$ents" >/dev/null 2>&1 \
+	|| /usr/libexec/PlistBuddy -c \
+	'Set :com.apple.security.cs.disable-library-validation true' "$ents" >/dev/null
+
+echo "entitlements carried over:"
+/usr/libexec/PlistBuddy -c 'Print' "$ents" | grep -E '=' | sed 's/^/    /'
+
+echo "copying $src -> $dst"
+cp -R "$src" "$dst"
+xattr -dr com.apple.quarantine "$dst" 2>/dev/null || true
+
+# Nested code must be valid before the bundle is sealed, so sign inside out.
+echo "signing nested libraries..."
+find "$dst" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 \
+	| xargs -0 -r -I{} codesign -f -s - {} 2>/dev/null || true
+for fw in "$dst"/Contents/Frameworks/*.framework; do
+	[[ -e "$fw" ]] && codesign -f -s - "$fw" 2>/dev/null || true
+done
+
+echo "signing executables..."
+for b in "$dst"/Contents/MacOS/*; do
+	[[ -f "$b" ]] || continue
+	file "$b" | grep -q 'Mach-O' || continue
+	codesign -f -s - --entitlements "$ents" "$b" 2>/dev/null || true
+done
+
+echo "sealing bundle..."
+codesign -f -s - --entitlements "$ents" "$dst"
+
+echo
+"$(dirname "${BASH_SOURCE[0]}")/timeshift-check" "$dst"

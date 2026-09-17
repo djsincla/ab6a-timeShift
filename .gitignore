@@ -1,0 +1,11 @@
+# Build output
+lib/
+bin/timeshift-probe
+bin/timeshift-ctl
+ab6a-timeShift.app/
+
+# macOS
+.DS_Store
+
+# Local agent config
+.claude/

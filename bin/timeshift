@@ -1,0 +1,110 @@
+#!/bin/bash
+#
+# timeshift — run a program with a shifted clock.
+#
+#   timeshift [options] -- <program> [args...]
+#
+# Options:
+#   --offset SPEC     shift the clock by SPEC (e.g. 250ms, -1.5s, 2h, -3d)
+#   --at WHEN         pin "now" to WHEN ("2030-01-01 09:00:00", or @epoch)
+#   --rate R          run the clock at R times real speed (default 1.0)
+#   --monotonic       also shift mach_absolute_time / CLOCK_MONOTONIC
+#   --control FILE    read offset/rate live from a control file (see
+#                     timeshift-ctl); overrides --offset and --rate at runtime
+#   --debug           print the shim's configuration to stderr on startup
+#
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB="$HERE/../lib/libtimeshift.dylib"
+
+die() { echo "timeshift: $*" >&2; exit 1; }
+
+usage() {
+	sed -n '3,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+	exit 2
+}
+
+# Parse a duration like "250ms", "-1.5s", "2h" into nanoseconds.
+parse_duration() {
+	local spec="$1" num unit
+	if [[ "$spec" =~ ^(-?[0-9]*\.?[0-9]+)(ns|us|ms|s|m|h|d)?$ ]]; then
+		num="${BASH_REMATCH[1]}"
+		unit="${BASH_REMATCH[2]:-s}"
+	else
+		die "cannot parse duration '$spec' (try 250ms, -1.5s, 2h)"
+	fi
+	local mult
+	case "$unit" in
+		ns) mult=1 ;;
+		us) mult=1000 ;;
+		ms) mult=1000000 ;;
+		s)  mult=1000000000 ;;
+		m)  mult=60000000000 ;;
+		h)  mult=3600000000000 ;;
+		d)  mult=86400000000000 ;;
+	esac
+	awk -v n="$num" -v m="$mult" 'BEGIN { printf "%.0f", n * m }'
+}
+
+# Convert a human date, or @epoch(.frac), into epoch seconds with fraction.
+parse_when() {
+	local when="$1"
+	if [[ "$when" == @* ]]; then
+		echo "${when#@}"
+		return
+	fi
+	local frac="" base="$when"
+	if [[ "$when" =~ ^(.*)(\.[0-9]+)$ ]]; then
+		base="${BASH_REMATCH[1]}"
+		frac="${BASH_REMATCH[2]}"
+	fi
+	local secs=""
+	local fmt
+	for fmt in "%Y-%m-%d %H:%M:%S" "%Y-%m-%dT%H:%M:%S" "%Y-%m-%d %H:%M" "%Y-%m-%d"; do
+		if secs="$(date -j -f "$fmt" "$base" +%s 2>/dev/null)"; then
+			echo "${secs}${frac}"
+			return
+		fi
+	done
+	die "cannot parse date '$when' (try '2030-01-01 09:00:00' or @1893456000.25)"
+}
+
+[[ -f "$LIB" ]] || die "$LIB not found — run 'make' first"
+
+offset_ns=""; at=""; rate=""; mono=""; control=""; debug=""
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--offset)    offset_ns="$(parse_duration "$2")"; shift 2 ;;
+		--at)        at="$(parse_when "$2")"; shift 2 ;;
+		--rate)      rate="$2"; shift 2 ;;
+		--monotonic) mono=1; shift ;;
+		--control)   control="$2"; shift 2 ;;
+		--debug)     debug=1; shift ;;
+		-h|--help)   usage ;;
+		--)          shift; break ;;
+		-*)          die "unknown option $1" ;;
+		*)           break ;;
+	esac
+done
+
+[[ $# -gt 0 ]] || usage
+
+[[ -n "$offset_ns" ]] && export TIMESHIFT_OFFSET_NS="$offset_ns"
+[[ -n "$at"        ]] && export TIMESHIFT_AT="$at"
+[[ -n "$rate"      ]] && export TIMESHIFT_RATE="$rate"
+[[ -n "$mono"      ]] && export TIMESHIFT_MONOTONIC=1
+[[ -n "$debug"     ]] && export TIMESHIFT_DEBUG=1
+if [[ -n "$control" ]]; then
+	[[ -f "$control" ]] || die "control file $control not found — create it with 'timeshift-ctl init $control'"
+	export TIMESHIFT_CONTROL="$(cd "$(dirname "$control")" && pwd)/$(basename "$control")"
+fi
+
+# Inherited by children too, which is usually what you want.
+if [[ -n "${DYLD_INSERT_LIBRARIES:-}" ]]; then
+	export DYLD_INSERT_LIBRARIES="$LIB:$DYLD_INSERT_LIBRARIES"
+else
+	export DYLD_INSERT_LIBRARIES="$LIB"
+fi
+
+exec "$@"

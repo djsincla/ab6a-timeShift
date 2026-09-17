@@ -1,0 +1,103 @@
+#!/bin/bash
+#
+# timeshift-check — report whether a program will accept DYLD_INSERT_LIBRARIES.
+#
+#   timeshift-check /path/to/binary
+#   timeshift-check /Applications/Some.app
+#
+# dyld strips every DYLD_* variable from a "restricted" process and does so
+# silently: the program simply runs with the real clock. This reports each
+# reason a target might be restricted, so you know before you debug a shim
+# that never loaded.
+#
+set -uo pipefail
+
+die() { echo "timeshift-check: $*" >&2; exit 1; }
+
+[[ $# -eq 1 ]] || { sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+
+target="$1"
+[[ -e "$target" ]] || die "$target does not exist"
+
+# An .app bundle: resolve to the actual Mach-O.
+if [[ -d "$target" && "$target" == *.app ]]; then
+	plist="$target/Contents/Info.plist"
+	exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null)"
+	[[ -n "$exe" ]] || die "cannot read CFBundleExecutable from $plist"
+	echo "bundle:     $target"
+	target="$target/Contents/MacOS/$exe"
+fi
+
+[[ -f "$target" ]] || die "$target is not a file"
+echo "executable: $target"
+
+blockers=()
+warnings=()
+
+# --- setuid / setgid ------------------------------------------------------
+perms="$(stat -f '%p' "$target")"
+if (( (8#$perms & 8#4000) != 0 )); then blockers+=("setuid bit is set"); fi
+if (( (8#$perms & 8#2000) != 0 )); then blockers+=("setgid bit is set"); fi
+
+# --- SIP-protected locations ----------------------------------------------
+case "$target" in
+	/System/*|/bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/libexec/*|/usr/lib/*)
+		blockers+=("lives in a SIP-protected path; Apple platform binaries never accept DYLD_*")
+		;;
+esac
+
+# --- __RESTRICT segment ---------------------------------------------------
+if otool -l "$target" 2>/dev/null | grep -q '__RESTRICT'; then
+	blockers+=("built with a __RESTRICT segment")
+fi
+
+# --- code signature -------------------------------------------------------
+siginfo="$(codesign -dv --verbose=4 "$target" 2>&1)"
+if grep -q 'code object is not signed' <<<"$siginfo"; then
+	warnings+=("not code signed — fine on Intel, but arm64 requires at least an ad-hoc signature")
+else
+	flags="$(grep -m1 '^CodeDirectory' <<<"$siginfo" | grep -o 'flags=[^ ]*' || true)"
+	[[ -n "$flags" ]] && echo "signature:  $flags"
+
+	if grep -q 'runtime' <<<"${flags:-}"; then
+		ents="$(codesign -d --entitlements - "$target" 2>/dev/null || true)"
+		if grep -q 'disable-library-validation' <<<"$ents"; then
+			warnings+=("hardened runtime is on, but library validation is disabled — injection works")
+		else
+			blockers+=("hardened runtime with library validation — rejects any dylib not signed by the same team")
+		fi
+	fi
+
+	ents="${ents:-$(codesign -d --entitlements - "$target" 2>/dev/null || true)}"
+	if grep -q '<key>' <<<"$ents"; then
+		if grep -qE 'get-task-allow</key>[[:space:]]*<true' <<<"$ents"; then
+			warnings+=("entitled, but get-task-allow is set (a debug build) — DYLD_* is honoured")
+		else
+			blockers+=("carries entitlements, which makes the process restricted under SIP")
+		fi
+	fi
+fi
+
+# --- verdict --------------------------------------------------------------
+echo
+if (( ${#blockers[@]} == 0 )); then
+	echo "VERDICT: injectable."
+else
+	echo "VERDICT: DYLD_INSERT_LIBRARIES will be stripped or the dylib rejected."
+	for b in "${blockers[@]}"; do echo "  - $b"; done
+	echo
+	echo "If you own the binary, rebuild it without the hardened runtime, or re-sign a *copy*:"
+	echo "    cp -R <app> /tmp/copy.app"
+	echo "    codesign -f -s - --deep --option runtime \\"
+	echo "      --entitlements <(plist with com.apple.security.cs.disable-library-validation) \\"
+	echo "      /tmp/copy.app"
+	echo "  Re-signing invalidates notarization and usually breaks Keychain, iCloud and App Groups."
+fi
+
+if (( ${#warnings[@]} > 0 )); then
+	echo
+	echo "notes:"
+	for w in "${warnings[@]}"; do echo "  - $w"; done
+fi
+
+(( ${#blockers[@]} == 0 ))
