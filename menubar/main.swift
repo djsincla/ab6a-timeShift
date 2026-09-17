@@ -147,8 +147,16 @@ final class Instance {
     let config: InstanceConfig
     let control: ControlFile
     var process: Process?
+    /// A matching WSJT-X that this app did not spawn — found by scanning the
+    /// process table, so restarting the menu bar app does not lose track of
+    /// instances that are still up.
+    var adoptedPID: pid_t?
 
-    var isRunning: Bool { process?.isRunning ?? false }
+    var isRunning: Bool {
+        if let p = process, p.isRunning { return true }
+        if let pid = adoptedPID, kill(pid, 0) == 0 { return true }
+        return false
+    }
 
     init?(config: InstanceConfig) {
         self.config = config
@@ -193,6 +201,7 @@ final class Instance {
         p.executableURL = exe
         p.arguments = config.rigName.isEmpty ? [] : ["--rig-name", config.rigName]
         p.environment = env
+        adoptedPID = nil
         p.terminationHandler = { _ in
             DispatchQueue.main.async { NSApp.sendAction(#selector(AppDelegate.refresh), to: nil, from: nil) }
         }
@@ -201,7 +210,25 @@ final class Instance {
     }
 
     func stop() {
-        process?.terminate()
+        if let p = process, p.isRunning {
+            p.terminate()
+            return
+        }
+        if let pid = adoptedPID, kill(pid, 0) == 0 {
+            kill(pid, SIGTERM)
+        }
+    }
+
+    /// argv for a WSJT-X started by this app is "<exe> --rig-name <rig>", or
+    /// just "<exe>" for the default configuration. jt9 has its own argv[0] and
+    /// so never matches.
+    func matches(commandLine: String, exePath: String) -> Bool {
+        guard commandLine.hasPrefix(exePath) else { return false }
+        let tail = String(commandLine.dropFirst(exePath.count))
+        if config.rigName.isEmpty {
+            return !tail.contains("--rig-name")
+        }
+        return tail.contains("--rig-name \(config.rigName)")
     }
 }
 
@@ -361,11 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "clock.arrow.2.circlepath",
-                                   accessibilityDescription: "ab6a-timeShift")
-            button.image?.isTemplate = true
-        }
+        statusItem.button?.image = baseIcon
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
@@ -381,11 +404,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Green whenever at least one instance is up, default tint otherwise.
+    /// The status bar draws a template image with its own tint and ignores
+    /// contentTintColor, so "running" is shown with a palette-coloured,
+    /// non-template copy of the symbol instead. Stopped goes back to the
+    /// template so it follows the menu bar's own light/dark appearance.
+    private var baseIcon: NSImage? {
+        NSImage(systemSymbolName: "clock.arrow.2.circlepath",
+                accessibilityDescription: "ab6a-timeShift")
+    }
+
+    /// Attaches instances to WSJT-X processes this app did not spawn.
+    private func adoptRunningInstances() {
+        let exePath = URL(fileURLWithPath: config.wsjtxApp)
+            .appendingPathComponent("Contents/MacOS/wsjtx").path
+
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-axo", "pid=,args="]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return }
+
+        for inst in instances where inst.process == nil {
+            inst.adoptedPID = nil
+        }
+        for line in text.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let space = trimmed.firstIndex(of: " "),
+                  let pid = pid_t(trimmed[trimmed.startIndex..<space]) else { continue }
+            let args = String(trimmed[trimmed.index(after: space)...])
+                .trimmingCharacters(in: .whitespaces)
+            for inst in instances where inst.process == nil {
+                if inst.matches(commandLine: args, exePath: exePath) {
+                    inst.adoptedPID = pid
+                    break
+                }
+            }
+        }
+    }
+
     private func updateStatusIcon() {
+        adoptRunningInstances()
         guard let button = statusItem.button else { return }
         let running = instances.filter { $0.isRunning }.count
-        button.contentTintColor = running > 0 ? .systemGreen : nil
+
+        if running > 0 {
+            let green = baseIcon?.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(paletteColors: [.systemGreen]))
+            green?.isTemplate = false
+            button.image = green
+        } else {
+            let plain = baseIcon
+            plain?.isTemplate = true
+            button.image = plain
+        }
+        button.contentTintColor = nil
         button.toolTip = running > 0
             ? "ab6a-timeShift — \(running) instance\(running == 1 ? "" : "s") running"
             : "ab6a-timeShift — stopped"
