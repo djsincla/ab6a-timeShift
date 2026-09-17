@@ -1,3 +1,11 @@
+# Sign with a Developer ID when one exists, otherwise ad-hoc. This matters
+# beyond tidiness: library validation admits a dylib signed by the SAME team as
+# the host executable, so a Developer ID-signed shim loads into a Developer
+# ID-signed app with the hardened runtime intact and no entitlement waiver.
+SIGN_ID ?= $(shell security find-identity -v -p codesigning 2>/dev/null \
+             | awk -F'"' '/Developer ID Application/ {print $$2; exit}')
+CODESIGN_ID := $(if $(SIGN_ID),$(SIGN_ID),-)
+
 CC       ?= clang
 CFLAGS   ?= -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -fvisibility=hidden
 ARCHS    ?= -arch arm64 -arch x86_64
@@ -6,9 +14,12 @@ FRAMEWORKS = -framework CoreFoundation
 LIB = lib/libtimeshift.dylib
 BIN = bin/timeshift-probe bin/timeshift-ctl
 
-.PHONY: all clean test check
+.PHONY: all clean test check signing-id
 
 all: $(LIB) $(BIN)
+
+signing-id:
+	@echo "signing as: $(CODESIGN_ID)"
 
 lib bin:
 	@mkdir -p $@
@@ -16,15 +27,15 @@ lib bin:
 $(LIB): src/timeshift.c | lib
 	$(CC) $(CFLAGS) $(ARCHS) -dynamiclib -install_name @rpath/libtimeshift.dylib \
 	    -o $@ $<
-	codesign -f -s - $@
+	codesign -f -s "$(CODESIGN_ID)" $@
 
 bin/timeshift-probe: src/probe.c | bin
 	$(CC) $(CFLAGS) $(ARCHS) $(FRAMEWORKS) -o $@ $<
-	codesign -f -s - $@
+	codesign -f -s "$(CODESIGN_ID)" $@
 
 bin/timeshift-ctl: src/tsctl.c | bin
 	$(CC) $(CFLAGS) $(ARCHS) -o $@ $<
-	codesign -f -s - $@
+	codesign -f -s "$(CODESIGN_ID)" $@
 
 # End-to-end: unshifted, shifted by -90 minutes, and a rate change.
 test: all
@@ -71,7 +82,7 @@ $(MENUBIN): menubar/main.swift
 	    -c 'Add :NSMicrophoneUsageDescription string "WSJT-X instances launched by ab6a-timeShift receive radio audio through your sound card." ' \
 	    -c 'Add :NSHighResolutionCapable bool true' \
 	    $(MENUAPP)/Contents/Info.plist >/dev/null
-	codesign -f -s - $(MENUAPP)
+	codesign -f -s "$(CODESIGN_ID)" --options runtime --timestamp $(MENUAPP)
 	@echo "built $(MENUAPP)"
 
 run-menubar: menubar

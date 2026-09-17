@@ -51,30 +51,43 @@ if otool -l "$target" 2>/dev/null | grep -q '__RESTRICT'; then
 	blockers+=("built with a __RESTRICT segment")
 fi
 
-# --- code signature -------------------------------------------------------
+# --- code signature ---------------------------------------------------------
+# Two separate mechanisms, easy to conflate:
+#   hardened runtime  -> process is restricted, dyld strips every DYLD_* var
+#   library validation -> only same-team or platform dylibs may load
+# The first is waived by allow-dyld-environment-variables, the second by
+# disable-library-validation OR by signing the shim with the same team.
 siginfo="$(codesign -dv --verbose=4 "$target" 2>&1)"
 if grep -q 'code object is not signed' <<<"$siginfo"; then
 	warnings+=("not code signed — fine on Intel, but arm64 requires at least an ad-hoc signature")
 else
 	flags="$(grep -m1 '^CodeDirectory' <<<"$siginfo" | grep -o 'flags=[^ ]*' || true)"
+	team="$(grep -m1 '^TeamIdentifier=' <<<"$siginfo" | cut -d= -f2)"
 	[[ -n "$flags" ]] && echo "signature:  $flags"
+	[[ -n "$team" && "$team" != "not set" ]] && echo "team:       $team"
 
-	if grep -q 'runtime' <<<"${flags:-}"; then
-		ents="$(codesign -d --entitlements - "$target" 2>/dev/null || true)"
-		if grep -q 'disable-library-validation' <<<"$ents"; then
-			warnings+=("hardened runtime is on, but library validation is disabled — injection works")
+	ents="$(codesign -d --entitlements - --xml "$target" 2>/dev/null || true)"
+	hardened=0
+	grep -q 'runtime' <<<"${flags:-}" && hardened=1
+
+	if (( hardened )); then
+		if grep -q 'allow-dyld-environment-variables' <<<"$ents"; then
+			warnings+=("hardened runtime is on, but allow-dyld-environment-variables is granted — DYLD_* survives")
 		else
-			blockers+=("hardened runtime with library validation — rejects any dylib not signed by the same team")
+			blockers+=("hardened runtime without com.apple.security.cs.allow-dyld-environment-variables — dyld strips DYLD_* silently")
+		fi
+
+		if grep -q 'disable-library-validation' <<<"$ents"; then
+			warnings+=("library validation is disabled — any signed dylib may load")
+		elif [[ -n "$team" && "$team" != "not set" ]]; then
+			warnings+=("library validation is on — the shim must be signed by team $team (build with SIGN_ID set to that Developer ID)")
+		else
+			blockers+=("library validation is on and the target has no team identifier — no dylib can satisfy it")
 		fi
 	fi
 
-	ents="${ents:-$(codesign -d --entitlements - "$target" 2>/dev/null || true)}"
-	if grep -q '<key>' <<<"$ents"; then
-		if grep -qE 'get-task-allow</key>[[:space:]]*<true' <<<"$ents"; then
-			warnings+=("entitled, but get-task-allow is set (a debug build) — DYLD_* is honoured")
-		else
-			blockers+=("carries entitlements, which makes the process restricted under SIP")
-		fi
+	if grep -qE 'get-task-allow</key>[[:space:]]*<true' <<<"$ents"; then
+		warnings+=("get-task-allow is set (a debug build) — DYLD_* is honoured regardless")
 	fi
 fi
 

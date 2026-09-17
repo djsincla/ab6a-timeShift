@@ -152,8 +152,13 @@ final class Instance {
 
     init?(config: InstanceConfig) {
         self.config = config
+        // A blank rig name launches WSJT-X with no --rig-name, i.e. its default
+        // configuration, so it needs a control file name of its own.
+        let slug = config.rigName.isEmpty
+            ? "default"
+            : config.rigName.replacingOccurrences(of: "/", with: "_")
         let ctlPath = Support.directory
-            .appendingPathComponent("\(config.rigName).ctl").path
+            .appendingPathComponent("\(slug).ctl").path
         guard let c = ControlFile(path: ctlPath) else { return nil }
         self.control = c
     }
@@ -186,7 +191,7 @@ final class Instance {
 
         let p = Process()
         p.executableURL = exe
-        p.arguments = ["--rig-name", config.rigName]
+        p.arguments = config.rigName.isEmpty ? [] : ["--rig-name", config.rigName]
         p.environment = env
         p.terminationHandler = { _ in
             DispatchQueue.main.async { NSApp.sendAction(#selector(AppDelegate.refresh), to: nil, from: nil) }
@@ -210,12 +215,18 @@ final class InstanceRow: NSView {
     private let instance: Instance
     private let step: Double
     private let onChange: () -> Void
+    private let onAction: (Action) -> Void
+    private let startButton = NSButton()
 
-    init(instance: Instance, range: Double, step: Double, onChange: @escaping () -> Void) {
+    enum Action { case toggle, configure, remove }
+
+    init(instance: Instance, range: Double, step: Double,
+         onChange: @escaping () -> Void, onAction: @escaping (Action) -> Void) {
         self.instance = instance
         self.step = step
         self.onChange = onChange
-        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 68))
+        self.onAction = onAction
+        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 96))
 
         nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         valueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
@@ -241,7 +252,24 @@ final class InstanceRow: NSView {
         let header = NSStackView(views: [nameLabel, NSView(), valueLabel])
         header.orientation = .horizontal
 
-        let stack = NSStackView(views: [header, slider, stepsStack])
+        // Start / Config / Remove, one line.
+        startButton.title = "Start"
+        startButton.bezelStyle = .rounded
+        startButton.controlSize = .small
+        startButton.font = .systemFont(ofSize: 11)
+        startButton.target = self
+        startButton.action = #selector(startTapped)
+
+        let actionsStack = NSStackView(views: [
+            startButton,
+            actionButton("Config", #selector(configTapped)),
+            actionButton("Remove", #selector(removeTapped)),
+        ])
+        actionsStack.orientation = .horizontal
+        actionsStack.spacing = 4
+        actionsStack.distribution = .fillEqually
+
+        let stack = NSStackView(views: [header, slider, stepsStack, actionsStack])
         stack.orientation = .vertical
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 4, right: 14)
@@ -261,6 +289,18 @@ final class InstanceRow: NSView {
     private func fmt(_ v: Double) -> String {
         v == v.rounded() ? String(format: "%.0fs", v) : String(format: "%.1fs", v)
     }
+
+    private func actionButton(_ title: String, _ action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        b.font = .systemFont(ofSize: 11)
+        return b
+    }
+
+    @objc private func startTapped()  { onAction(.toggle) }
+    @objc private func configTapped() { onAction(.configure) }
+    @objc private func removeTapped() { onAction(.remove) }
 
     private func button(_ title: String, _ delta: Double?) -> NSButton {
         let b = NSButton(title: title, target: self, action: #selector(stepTapped(_:)))
@@ -289,10 +329,18 @@ final class InstanceRow: NSView {
     }
 
     func sync() {
-        let dot = instance.isRunning ? "●" : "○"
-        let state = instance.isRunning ? "running" : "stopped"
-        nameLabel.stringValue = "\(dot)  \(instance.config.name)  (\(instance.config.rigName)) — \(state)"
-        nameLabel.textColor = instance.isRunning ? .labelColor : .secondaryLabelColor
+        let running = instance.isRunning
+        let rig = instance.config.rigName.isEmpty ? "default config" : instance.config.rigName
+        let text = "\(running ? "●" : "○")  \(instance.config.name)  (\(rig)) — \(running ? "running" : "stopped")"
+        let attributed = NSMutableAttributedString(string: text)
+        attributed.addAttribute(.foregroundColor,
+                                value: running ? NSColor.systemGreen : NSColor.tertiaryLabelColor,
+                                range: NSRange(location: 0, length: 1))
+        attributed.addAttribute(.foregroundColor,
+                                value: running ? NSColor.labelColor : NSColor.secondaryLabelColor,
+                                range: NSRange(location: 1, length: text.count - 1))
+        nameLabel.attributedStringValue = attributed
+        startButton.title = running ? "Stop" : "Start"
         let secs = instance.control.offsetSeconds
         valueLabel.stringValue = String(format: "%+.3f s", secs)
         valueLabel.textColor = secs == 0 ? .secondaryLabelColor : .controlAccentColor
@@ -308,6 +356,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var config = AppConfig.default
     private var instances: [Instance] = []
     private var rows: [InstanceRow] = []
+    private var statusTimer: Timer?
+    static let maxInstances = 6
 
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -317,10 +367,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.image?.isTemplate = true
         }
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
         reload()
         requestMicrophoneAccess()
+        updateStatusIcon()
+
+        // Instances can exit on their own; poll so the icon stays truthful even
+        // when the menu is closed and no row is around to refresh itself.
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            DispatchQueue.main.async { self.updateStatusIcon() }
+        }
+    }
+
+    /// Green whenever at least one instance is up, default tint otherwise.
+    private func updateStatusIcon() {
+        guard let button = statusItem.button else { return }
+        let running = instances.filter { $0.isRunning }.count
+        button.contentTintColor = running > 0 ? .systemGreen : nil
+        button.toolTip = running > 0
+            ? "ab6a-timeShift — \(running) instance\(running == 1 ? "" : "s") running"
+            : "ab6a-timeShift — stopped"
     }
 
     /// WSJT-X is launched as a child of this app, so macOS attributes its
@@ -367,6 +435,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func refresh() {
         for r in rows { r.sync() }
+        updateStatusIcon()
+    }
+
+    // MARK: Instance configuration
+
+    /// Saves the edited configuration and rebuilds, preserving running instances.
+    private func persist(_ updated: AppConfig) {
+        config = updated
+        Support.saveConfig(updated)
+        instances = updated.instances.compactMap { cfg in
+            instances.first { $0.config.rigName == cfg.rigName && $0.isRunning }
+                ?? Instance(config: cfg)
+        }
+        refresh()
+    }
+
+    /// WSJT-X refuses to run two instances under the same rig name, so the name
+    /// has to be unique here too. Blank is a legal value — it means the default
+    /// configuration — but only one instance can claim it.
+    private func rigNameTaken(_ rigName: String, excluding index: Int?) -> Bool {
+        let candidate = rigName.trimmingCharacters(in: .whitespaces).lowercased()
+        for (i, inst) in config.instances.enumerated() where i != index {
+            if inst.rigName.trimmingCharacters(in: .whitespaces).lowercased() == candidate {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func promptForInstance(title: String, name: String, rigName: String) -> InstanceConfig? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "The rig name is passed to WSJT-X as --rig-name and must be "
+            + "unique. Leave it blank to launch WSJT-X with its default configuration."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 92))
+        func label(_ text: String, y: CGFloat) -> NSTextField {
+            let l = NSTextField(labelWithString: text)
+            l.frame = NSRect(x: 0, y: y, width: 320, height: 15)
+            l.font = .systemFont(ofSize: 11)
+            l.textColor = .secondaryLabelColor
+            return l
+        }
+        let nameField = NSTextField(frame: NSRect(x: 0, y: 48, width: 320, height: 22))
+        nameField.stringValue = name
+        nameField.placeholderString = "Rig 3"
+        let rigField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        rigField.stringValue = rigName
+        rigField.placeholderString = "blank = WSJT-X default configuration"
+
+        container.addSubview(label("Display name", y: 72))
+        container.addSubview(nameField)
+        container.addSubview(label("Rig name (--rig-name)", y: 24))
+        container.addSubview(rigField)
+        alert.accessoryView = container
+        alert.window.initialFirstResponder = nameField
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let finalRig = rigField.stringValue.trimmingCharacters(in: .whitespaces)
+        let finalName = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+        return InstanceConfig(
+            name: finalName.isEmpty ? (finalRig.isEmpty ? "Default" : finalRig) : finalName,
+            rigName: finalRig)
+    }
+
+    @objc private func addRig() {
+        guard config.instances.count < AppDelegate.maxInstances else { return }
+        guard let new = promptForInstance(title: "Add Rig", name: "", rigName: "") else { return }
+        guard !rigNameTaken(new.rigName, excluding: nil) else {
+            warn("A rig named \(new.rigName.isEmpty ? "(default)" : new.rigName) already exists.")
+            return
+        }
+        var updated = config
+        updated.instances.append(new)
+        persist(updated)
+    }
+
+    private func editRig(at idx: Int) {
+        guard idx < config.instances.count else { return }
+        let current = config.instances[idx]
+        guard let edited = promptForInstance(title: "Configure Rig",
+                                             name: current.name,
+                                             rigName: current.rigName) else { return }
+        guard !rigNameTaken(edited.rigName, excluding: idx) else {
+            warn("A rig named \(edited.rigName.isEmpty ? "(default)" : edited.rigName) already exists.")
+            return
+        }
+        if instances.indices.contains(idx), instances[idx].isRunning {
+            warn("Stop \(current.name) before renaming it — the rig name is fixed for the life of the process.")
+            return
+        }
+        var updated = config
+        updated.instances[idx] = edited
+        persist(updated)
+    }
+
+    private func removeRig(at idx: Int) {
+        guard idx < config.instances.count else { return }
+        if instances.indices.contains(idx), instances[idx].isRunning {
+            instances[idx].stop()
+        }
+        var updated = config
+        updated.instances.remove(at: idx)
+        persist(updated)
+    }
+
+    private func warn(_ text: String) {
+        let alert = NSAlert()
+        alert.messageText = "ab6a-timeShift"
+        alert.informativeText = text
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     // MARK: Menu
@@ -385,23 +567,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         for (idx, inst) in instances.enumerated() {
-            let row = InstanceRow(instance: inst,
-                                  range: config.rangeSeconds,
-                                  step: config.stepSeconds) { [weak self] in self?.refresh() }
+            let row = InstanceRow(
+                instance: inst,
+                range: config.rangeSeconds,
+                step: config.stepSeconds,
+                onChange: { [weak self] in self?.refresh() },
+                onAction: { [weak self] action in
+                    guard let self else { return }
+                    switch action {
+                    case .toggle:    self.toggleInstance(at: idx)
+                    case .configure: self.editRig(at: idx)
+                    case .remove:    self.removeRig(at: idx)
+                    }
+                    self.statusItem.menu?.cancelTracking()
+                })
             rows.append(row)
             let item = NSMenuItem()
             item.view = row
             menu.addItem(item)
-
-            let toggle = NSMenuItem(
-                title: inst.isRunning ? "Stop \(inst.config.name)" : "Start \(inst.config.name)",
-                action: #selector(toggleInstance(_:)), keyEquivalent: "")
-            toggle.target = self
-            toggle.tag = idx
-            menu.addItem(toggle)
             menu.addItem(.separator())
         }
 
+        let add = NSMenuItem(title: config.instances.count >= AppDelegate.maxInstances
+                                ? "Add Rig (maximum \(AppDelegate.maxInstances) reached)"
+                                : "Add Rig…",
+                             action: #selector(addRig), keyEquivalent: "")
+        add.target = self
+        add.isEnabled = config.instances.count < AppDelegate.maxInstances
+        menu.addItem(add)
+        menu.addItem(.separator())
         addItem(menu, "Start All", #selector(startAll))
         addItem(menu, "Stop All", #selector(stopAll))
         menu.addItem(.separator())
@@ -422,9 +616,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
-    @objc private func toggleInstance(_ sender: NSMenuItem) {
-        guard sender.tag < instances.count else { return }
-        let inst = instances[sender.tag]
+    private func toggleInstance(at index: Int) {
+        guard index < instances.count else { return }
+        let inst = instances[index]
         if inst.isRunning {
             inst.stop()
         } else {
