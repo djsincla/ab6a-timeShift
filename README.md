@@ -170,6 +170,44 @@ Notes specific to WSJT-X:
   run both at once on one rig.
 
 
+### ab6a-timeShift — the menubar controller
+
+```sh
+make menubar     # builds ab6a-timeShift.app
+open ab6a-timeShift.app
+```
+
+A menubar app that starts each configured WSJT-X instance with its own
+`--rig-name` and its own control file, and gives every one a slider plus
+−1s / −0.1s / reset / +0.1s / +1s buttons that move that instance's clock
+while it runs. Configuration lives in
+`~/Library/Application Support/ab6a-timeShift/config.json`:
+
+```json
+{
+  "wsjtxApp": "/Applications/wsjtx shift.app",
+  "dylib": "/Users/you/Developer/timeShift/lib/libtimeshift.dylib",
+  "rangeSeconds": 5.0,
+  "stepSeconds": 0.1,
+  "instances": [
+    { "name": "Rig 1", "rigName": "rig1" },
+    { "name": "Rig 2", "rigName": "rig2" }
+  ]
+}
+```
+
+**Microphone access belongs to this app, not to WSJT-X.** macOS attributes a
+child process's microphone request to the responsible process, which is
+whatever launched it. ab6a-timeShift therefore declares its own
+`NSMicrophoneUsageDescription` and requests access at startup; the menu shows
+the current grant and links to the right Settings pane. If you launch WSJT-X
+from a terminal instead, grant the microphone to your terminal.
+
+Do not run `tccutil reset Microphone` against the WSJT-X bundle identifier —
+the re-signed copy shares it with your original install, so you would revoke
+the working app's permission too.
+
+
 ## Limits
 
 - **Nothing outside the process moves.** File timestamps, `kqueue` and
@@ -206,6 +244,8 @@ src/probe.c       timeshift-probe, reads every interposed clock
 bin/timeshift     wrapper that sets up the environment and execs
 bin/timeshift-check  reports whether a target will accept injection
 bin/timeshift-resign make an injectable ad-hoc-signed copy of a hardened .app
+menubar/main.swift  ab6a-timeShift, the menubar controller
+docs/index.html     landing page (GitHub Pages: Settings > Pages > main /docs)
 ```
 
 Built universal (arm64 + x86_64) so it can also be injected into processes
