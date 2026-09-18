@@ -268,7 +268,7 @@ final class InstanceRow: NSView {
         self.step = step
         self.onChange = onChange
         self.onAction = onAction
-        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 96))
+        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 74))
 
         nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         valueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
@@ -288,15 +288,6 @@ final class InstanceRow: NSView {
         // on a bipolar control whose neutral value is the centre.
         slider.trackFillColor = .clear
 
-        let stepsStack = NSStackView(views: [
-            button("−1s", -1.0), button("−\(fmt(step))", -step),
-            button("0", nil),
-            button("+\(fmt(step))", step), button("+1s", 1.0),
-        ])
-        stepsStack.orientation = .horizontal
-        stepsStack.spacing = 4
-        stepsStack.distribution = .fillEqually
-
         let header = NSStackView(views: [nameLabel, NSView(), valueLabel])
         header.orientation = .horizontal
 
@@ -308,16 +299,27 @@ final class InstanceRow: NSView {
         startButton.target = self
         startButton.action = #selector(startTapped)
 
+        // Fixed width so the row does not shuffle when Start becomes Stop.
+        startButton.widthAnchor.constraint(equalToConstant: 58).isActive = true
+
+        // A trailing spacer absorbs the slack, which left-justifies the buttons
+        // instead of stretching them across the row.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
         let actionsStack = NSStackView(views: [
             startButton,
             actionButton("Config", #selector(configTapped)),
             actionButton("Remove", #selector(removeTapped)),
+            spacer,
         ])
         actionsStack.orientation = .horizontal
-        actionsStack.spacing = 4
-        actionsStack.distribution = .fillEqually
+        actionsStack.spacing = 6
+        actionsStack.distribution = .fill
+        actionsStack.alignment = .centerY
 
-        let stack = NSStackView(views: [header, slider, stepsStack, actionsStack])
+        let stack = NSStackView(views: [header, slider, actionsStack])
         stack.orientation = .vertical
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 4, right: 14)
@@ -334,10 +336,6 @@ final class InstanceRow: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func fmt(_ v: Double) -> String {
-        v == v.rounded() ? String(format: "%.0fs", v) : String(format: "%.1fs", v)
-    }
-
     private func actionButton(_ title: String, _ action: Selector) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.bezelStyle = .rounded
@@ -349,27 +347,6 @@ final class InstanceRow: NSView {
     @objc private func startTapped()  { onAction(.toggle) }
     @objc private func configTapped() { onAction(.configure) }
     @objc private func removeTapped() { onAction(.remove) }
-
-    private func button(_ title: String, _ delta: Double?) -> NSButton {
-        let b = NSButton(title: title, target: self, action: #selector(stepTapped(_:)))
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        b.font = .systemFont(ofSize: 11)
-        b.tag = delta == nil ? 9999 : Int((delta! * 1000).rounded())
-        return b
-    }
-
-    @objc private func stepTapped(_ sender: NSButton) {
-        lastLocalChange = Date()
-        if sender.tag == 9999 {
-            instance.control.offsetNanos = 0
-        } else {
-            let deltaNs = Int64(sender.tag) * 1_000_000
-            instance.control.offsetNanos += deltaNs
-        }
-        sync()
-        onChange()
-    }
 
     @objc private func sliderMoved() {
         lastLocalChange = Date()

@@ -177,10 +177,14 @@ make menubar     # builds ab6a-timeShift.app
 open ab6a-timeShift.app
 ```
 
-A menubar app that starts each configured WSJT-X instance with its own
-`--rig-name` and its own control file, and gives every one a slider plus
-−1s / −0.1s / reset / +0.1s / +1s buttons that move that instance's clock
-while it runs. Configuration lives in
+A menu bar app that starts each configured WSJT-X instance with its own
+`--rig-name` and its own control file, and gives every one a slider that moves
+that instance's clock while it runs. The slider snaps to `stepSeconds`, so a
+drag lands on exact 0.1 s marks by default.
+
+There is also a floating control panel — **Show Control Panel** in the menu —
+which joins all Spaces and so is reachable from any display. It is
+non-activating: adjusting a rig does not take focus away from WSJT-X. Configuration lives in
 `~/Library/Application Support/ab6a-timeShift/config.json`:
 
 ```json

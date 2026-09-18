@@ -40,8 +40,8 @@ echo "==> bundle"
     -c 'Add :CFBundleIdentifier string com.ab6a.timeshift' \
     -c 'Add :CFBundleIconFile string ab6a-timeShift' \
     -c 'Add :CFBundlePackageType string APPL' \
-    -c 'Add :CFBundleShortVersionString string 1.0' \
-    -c 'Add :CFBundleVersion string 1' \
+    -c 'Add :CFBundleShortVersionString string 1.1' \
+    -c 'Add :CFBundleVersion string 2' \
     -c 'Add :LSMinimumSystemVersion string 13.0' \
     -c 'Add :LSUIElement bool true' \
     -c 'Add :NSHighResolutionCapable bool true' \
