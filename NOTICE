@@ -1,0 +1,25 @@
+AB6A TimeShift
+Copyright (C) 2026 Dwayne Sinclair (AB6A)
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version. See the LICENSE file for the full text.
+
+This matches the licensing of AB6A RigCtl, so the two programs can be read and
+reused on the same terms.
+
+WSJT-X is a separate work, not included here. It is available from
+https://wsjt.sourceforge.io/ and is published under the GNU General Public
+License.
+
+This program does not link any WSJT-X code. The shim is an independent dylib
+that macOS loads into the process at run time through DYLD_INSERT_LIBRARIES,
+and it replaces only documented libSystem clock entry points - gettimeofday,
+clock_gettime, clock_gettime_nsec_np, time and the mach_*_time family.
+
+`timeshift-resign` does not redistribute WSJT-X either. It duplicates the copy
+already installed on your own machine and re-signs that duplicate with your own
+signing identity, so that macOS will honour DYLD_INSERT_LIBRARIES for it. The
+duplicate never leaves your machine, and your original installation is left
+untouched.

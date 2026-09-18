@@ -1083,9 +1083,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                          .foregroundColor: accent]))
 
         credits.append(NSAttributedString(
-            string: "WSJT-X is separate software under its own licence. This app never "
-                  + "modifies your installed copy: timeshift-resign makes an injectable "
-                  + "duplicate alongside it.",
+            string: "GPL-2.0-or-later. WSJT-X is separate software under its own "
+                  + "licence; this app links none of its code and never modifies your "
+                  + "installed copy - timeshift-resign duplicates it alongside.",
             attributes: [.font: NSFont.systemFont(ofSize: 11),
                          .foregroundColor: NSColor.secondaryLabelColor]))
 
