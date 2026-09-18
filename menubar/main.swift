@@ -284,6 +284,9 @@ final class InstanceRow: NSView {
         slider.numberOfTickMarks = Int(range * 2) + 1
         slider.allowsTickMarkValuesOnly = false
         slider.tickMarkPosition = .below
+        // The default fill runs from the minimum, which reads as "mostly on"
+        // on a bipolar control whose neutral value is the centre.
+        slider.trackFillColor = .clear
 
         let stepsStack = NSStackView(views: [
             button("−1s", -1.0), button("−\(fmt(step))", -step),
@@ -431,7 +434,7 @@ final class ControlPanel: NSObject, NSWindowDelegate {
     init(onAddRig: @escaping () -> Void,
          onStartAll: @escaping () -> Void,
          onStopAll: @escaping () -> Void) {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 392, height: 240),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 404, height: 240),
                         styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
                         backing: .buffered,
                         defer: false)
@@ -445,9 +448,38 @@ final class ControlPanel: NSObject, NSWindowDelegate {
         rowStack.orientation = .vertical
         rowStack.spacing = 0
         rowStack.alignment = .leading
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+
+        // An NSScrollView document view that is not flipped anchors its content
+        // to the BOTTOM of the clip view, which leaves the panel looking empty
+        // with the rows crushed into a corner. The document view has to be
+        // flipped for top-down layout.
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(rowStack)
+
+        scroll.documentView = document
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 200)
+
+        NSLayoutConstraint.activate([
+            rowStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            rowStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            rowStack.topAnchor.constraint(equalTo: document.topAnchor),
+            rowStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            scroll.widthAnchor.constraint(equalToConstant: 392),
+            scrollHeight,
+        ])
 
         func footerButton(_ title: String, _ handler: @escaping () -> Void) -> NSButton {
-            let b = NSButton(title: title, target: ActionProxy.shared, action: #selector(ActionProxy.fire(_:)))
+            let b = NSButton(title: title,
+                             target: ActionProxy.shared,
+                             action: #selector(ActionProxy.fire(_:)))
             b.bezelStyle = .rounded
             b.controlSize = .small
             b.font = .systemFont(ofSize: 11)
@@ -463,32 +495,20 @@ final class ControlPanel: NSObject, NSWindowDelegate {
         footer.orientation = .horizontal
         footer.distribution = .fillEqually
         footer.spacing = 6
-
-        scroll.documentView = rowStack
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.autohidesScrollers = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 200)
-        scrollHeight.isActive = true
-        scroll.widthAnchor.constraint(equalToConstant: 392).isActive = true
-
-        let content = NSStackView(views: [scroll, footer])
-        content.orientation = .vertical
-        content.spacing = 10
-        content.alignment = .leading
-        content.edgeInsets = NSEdgeInsets(top: 10, left: 6, bottom: 12, right: 6)
-        content.translatesAutoresizingMaskIntoConstraints = false
+        footer.translatesAutoresizingMaskIntoConstraints = false
 
         let host = NSView()
-        host.addSubview(content)
+        host.addSubview(scroll)
+        host.addSubview(footer)
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            content.topAnchor.constraint(equalTo: host.topAnchor),
-            content.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            footer.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: host.topAnchor, constant: 8),
+            scroll.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 10),
+            footer.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 10),
+            footer.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -10),
+            footer.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -10),
         ])
+
         panel.contentView = host
         super.init()
         panel.delegate = self
@@ -522,9 +542,11 @@ final class ControlPanel: NSObject, NSWindowDelegate {
         // Grow to fit the rigs, but never past what the screen can show.
         rowStack.layoutSubtreeIfNeeded()
         let wanted = rowStack.fittingSize.height
-        let ceiling = (NSScreen.main?.visibleFrame.height ?? 800) - 160
-        scrollHeight.constant = max(120, min(wanted, ceiling))
-        panel.setContentSize(panel.contentView?.fittingSize ?? NSSize(width: 392, height: 240))
+        let ceiling = (NSScreen.main?.visibleFrame.height ?? 900) - 160
+        scrollHeight.constant = max(140, min(wanted, ceiling))
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let fitted = panel.contentView?.fittingSize ?? NSSize(width: 404, height: 260)
+        panel.setContentSize(NSSize(width: 404, height: fitted.height))
     }
 
     /// Only the origin is persisted. The height follows the rig count, so
@@ -576,6 +598,11 @@ final class ControlPanel: NSObject, NSWindowDelegate {
     func close() { panel.orderOut(nil) }
 
     func sync() { for r in rows { r.sync() } }
+}
+
+/// Top-down layout inside an NSScrollView.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// NSButton needs a target/action pair; this keeps closures alive for them.
