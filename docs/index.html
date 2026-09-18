@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AB6A timeShift</title>
+<title>AB6A TimeShift</title>
 <style>
   :root {
     --ground: #0d151e;
@@ -31,13 +31,7 @@
     background: radial-gradient(ellipse at 50% 100%, rgba(255,160,60,.16), transparent 62%);
     pointer-events: none;
   }
-  .logo {
-    width: 132px; height: 132px; border-radius: 30px; position: relative;
-    display: inline-flex; align-items: center; justify-content: center;
-    background: var(--panel); border: 1px solid var(--line);
-    box-shadow: 0 18px 44px rgba(0,0,0,.5);
-  }
-  .logo svg { width: 78px; height: 78px; }
+  .logo { width: 132px; height: 132px; border-radius: 30px; position: relative; }
   h1 {
     font-size: 44px; letter-spacing: -.02em; margin: 22px 0 8px; font-weight: 650;
     position: relative;
@@ -186,16 +180,8 @@
 
 <header>
   <div class="wrap">
-    <div class="logo">
-      <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
-        <circle cx="32" cy="32" r="25" stroke="#ffa03c" stroke-width="3"/>
-        <path d="M32 16v16l11 7" stroke="#ffa03c" stroke-width="3" stroke-linecap="round"
-              stroke-linejoin="round"/>
-        <path d="M50 12a25 25 0 0 1 0 0" stroke="#56d364" stroke-width="3"/>
-        <circle cx="52" cy="14" r="5" fill="#56d364"/>
-      </svg>
-    </div>
-    <h1>AB6A timeShift</h1>
+    <img class="logo" src="icon.png" alt="AB6A TimeShift">
+    <h1>AB6A TimeShift</h1>
     <p class="tag">a different clock for every rig</p>
     <p class="sub">A macOS menu bar app that runs several WSJT-X instances at once, each on its own
        independently adjustable clock.<br>
@@ -226,8 +212,10 @@
 
         <hr>
         <div class="act">Add Rig&hellip;</div>
+        <div class="act">Show Control Panel</div>
         <div class="act dim">Microphone: granted</div>
-        <div class="act dim">Quit</div>
+        <div class="act dim">About AB6A TimeShift&hellip;</div>
+        <div class="act dim">Quit AB6A TimeShift</div>
       </div>
     </div>
     <p class="caption">Two rigs running, each shifted on its own &mdash; the icon turns green while any instance is up.</p>
@@ -431,7 +419,7 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
 
 <footer>
   <div class="wrap">
-    AB6A timeShift &mdash; a macOS clock shim for weak-signal work<br>
+    AB6A TimeShift &mdash; a macOS clock shim for weak-signal work<br>
     arm64 + x86_64 &middot; macOS 13+ &middot;
     <a href="https://github.com/djsincla/ab6a-timeShift">github.com/djsincla/ab6a-timeShift</a>
   </div>
