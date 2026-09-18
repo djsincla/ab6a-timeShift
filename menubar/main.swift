@@ -98,6 +98,7 @@ struct AppConfig: Codable {
     var rangeSeconds: Double
     var stepSeconds: Double
     var instances: [InstanceConfig]
+    var showPanel: Bool?
 
     static let `default` = AppConfig(
         wsjtxApp: "/Applications/wsjtx shift.app",
@@ -107,7 +108,8 @@ struct AppConfig: Codable {
         instances: [
             InstanceConfig(name: "Rig 1", rigName: "rig1"),
             InstanceConfig(name: "Rig 2", rigName: "rig2"),
-        ])
+        ],
+        showPanel: false)
 }
 
 enum Support {
@@ -152,10 +154,21 @@ final class Instance {
     /// instances that are still up.
     var adoptedPID: pid_t?
 
-    var isRunning: Bool {
-        if let p = process, p.isRunning { return true }
-        if let pid = adoptedPID, kill(pid, 0) == 0 { return true }
-        return false
+    var isRunning: Bool { runningPID != nil }
+
+    /// The pid backing "running", whether we spawned it or adopted it.
+    var runningPID: pid_t? {
+        if let p = process, p.isRunning { return p.processIdentifier }
+        if let pid = adoptedPID, kill(pid, 0) == 0 { return pid }
+        return nil
+    }
+
+    /// True when the process was found in the process table rather than started
+    /// here — an orphan from a previous run of this app, or a WSJT-X the user
+    /// launched themselves.
+    var isAdopted: Bool {
+        if let p = process, p.isRunning { return false }
+        return adoptedPID != nil
     }
 
     init?(config: InstanceConfig) {
@@ -244,6 +257,8 @@ final class InstanceRow: NSView {
     private let onChange: () -> Void
     private let onAction: (Action) -> Void
     private let startButton = NSButton()
+    /// External refreshes must not fight a drag in progress.
+    private var lastLocalChange = Date.distantPast
 
     enum Action { case toggle, configure, remove }
 
@@ -264,8 +279,11 @@ final class InstanceRow: NSView {
         slider.isContinuous = true
         slider.target = self
         slider.action = #selector(sliderMoved)
-        slider.numberOfTickMarks = Int(range * 2 / step) + 1
-        slider.allowsTickMarkValuesOnly = true
+        // One tick per second for reference. Snapping to `step` is done in
+        // sliderMoved: a tick per 0.1 s would render as a dotted smear.
+        slider.numberOfTickMarks = Int(range * 2) + 1
+        slider.allowsTickMarkValuesOnly = false
+        slider.tickMarkPosition = .below
 
         let stepsStack = NSStackView(views: [
             button("−1s", -1.0), button("−\(fmt(step))", -step),
@@ -339,6 +357,7 @@ final class InstanceRow: NSView {
     }
 
     @objc private func stepTapped(_ sender: NSButton) {
+        lastLocalChange = Date()
         if sender.tag == 9999 {
             instance.control.offsetNanos = 0
         } else {
@@ -350,7 +369,10 @@ final class InstanceRow: NSView {
     }
 
     @objc private func sliderMoved() {
-        instance.control.offsetSeconds = slider.doubleValue
+        lastLocalChange = Date()
+        let snapped = (slider.doubleValue / step).rounded() * step
+        slider.doubleValue = snapped
+        instance.control.offsetSeconds = snapped
         sync()
         onChange()
     }
@@ -368,10 +390,206 @@ final class InstanceRow: NSView {
                                 range: NSRange(location: 1, length: text.count - 1))
         nameLabel.attributedStringValue = attributed
         startButton.title = running ? "Stop" : "Start"
+
+        // "Is it really running?" should be answerable without reaching for ps.
+        if let pid = instance.runningPID {
+            toolTip = instance.isAdopted
+                ? "pid \(pid) — adopted, not started by this app. Stop will send it SIGTERM."
+                : "pid \(pid) — started by this app"
+        } else {
+            toolTip = "not running"
+        }
         let secs = instance.control.offsetSeconds
         valueLabel.stringValue = String(format: "%+.3f s", secs)
         valueLabel.textColor = secs == 0 ? .secondaryLabelColor : .controlAccentColor
-        slider.doubleValue = secs
+        if Date().timeIntervalSince(lastLocalChange) > 1.0 {
+            slider.doubleValue = secs
+        }
+    }
+}
+
+
+// MARK: - Floating control panel
+
+/// macOS shows a status item only on the display that owns the menu bar, and
+/// there is no API to put one on every screen. This panel is the way around
+/// that: it joins all Spaces, floats above full-screen apps, and can be dragged
+/// to whichever display you are working on.
+///
+/// It is a non-activating panel on purpose — clicking a slider adjusts the rig
+/// without taking focus away from WSJT-X.
+@MainActor
+final class ControlPanel: NSObject, NSWindowDelegate {
+    private let panel: NSPanel
+    private let rowStack = NSStackView()
+    private let scroll = NSScrollView()
+    private var scrollHeight: NSLayoutConstraint!
+    private(set) var rows: [InstanceRow] = []
+
+    var isVisible: Bool { panel.isVisible }
+
+    init(onAddRig: @escaping () -> Void,
+         onStartAll: @escaping () -> Void,
+         onStopAll: @escaping () -> Void) {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 392, height: 240),
+                        styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
+                        backing: .buffered,
+                        defer: false)
+        panel.title = "ab6a-timeShift"
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+
+        rowStack.orientation = .vertical
+        rowStack.spacing = 0
+        rowStack.alignment = .leading
+
+        func footerButton(_ title: String, _ handler: @escaping () -> Void) -> NSButton {
+            let b = NSButton(title: title, target: ActionProxy.shared, action: #selector(ActionProxy.fire(_:)))
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 11)
+            ActionProxy.shared.register(b, handler)
+            return b
+        }
+
+        let footer = NSStackView(views: [
+            footerButton("Add Rig…", onAddRig),
+            footerButton("Start All", onStartAll),
+            footerButton("Stop All", onStopAll),
+        ])
+        footer.orientation = .horizontal
+        footer.distribution = .fillEqually
+        footer.spacing = 6
+
+        scroll.documentView = rowStack
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 200)
+        scrollHeight.isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 392).isActive = true
+
+        let content = NSStackView(views: [scroll, footer])
+        content.orientation = .vertical
+        content.spacing = 10
+        content.alignment = .leading
+        content.edgeInsets = NSEdgeInsets(top: 10, left: 6, bottom: 12, right: 6)
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = NSView()
+        host.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            content.topAnchor.constraint(equalTo: host.topAnchor),
+            content.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            footer.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -12),
+        ])
+        panel.contentView = host
+        super.init()
+        panel.delegate = self
+    }
+
+    /// Rebuilt whenever the rig list changes; rows are the same view class the
+    /// menu uses, so both stay in step through the shared control files.
+    func rebuild(instances: [Instance], range: Double, step: Double,
+                 onChange: @escaping () -> Void,
+                 onAction: @escaping (Int, InstanceRow.Action) -> Void) {
+        for view in rowStack.arrangedSubviews {
+            rowStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        rows.removeAll()
+
+        for (idx, inst) in instances.enumerated() {
+            if idx > 0 {
+                let rule = NSBox()
+                rule.boxType = .separator
+                rowStack.addArrangedSubview(rule)
+                rule.widthAnchor.constraint(equalToConstant: 380).isActive = true
+            }
+            let row = InstanceRow(instance: inst, range: range, step: step,
+                                  onChange: onChange,
+                                  onAction: { action in onAction(idx, action) })
+            rowStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: 380).isActive = true
+            rows.append(row)
+        }
+        // Grow to fit the rigs, but never past what the screen can show.
+        rowStack.layoutSubtreeIfNeeded()
+        let wanted = rowStack.fittingSize.height
+        let ceiling = (NSScreen.main?.visibleFrame.height ?? 800) - 160
+        scrollHeight.constant = max(120, min(wanted, ceiling))
+        panel.setContentSize(panel.contentView?.fittingSize ?? NSSize(width: 392, height: 240))
+    }
+
+    /// Only the origin is persisted. The height follows the rig count, so
+    /// restoring a whole saved frame would fight the content size.
+    private static let originKey = "ab6a-timeShift.panelOrigin"
+
+    func windowDidMove(_ note: Notification) {
+        UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin),
+                                  forKey: ControlPanel.originKey)
+    }
+
+    /// Keeps the whole panel inside one display. Without this it can be placed
+    /// so that it spans the gap between two screens, which is how it first
+    /// landed here.
+    private func clamped(_ origin: NSPoint, size: NSSize, to screen: NSScreen?) -> NSPoint {
+        guard let v = (screen ?? NSScreen.main)?.visibleFrame else { return origin }
+        return NSPoint(x: min(max(origin.x, v.minX), max(v.minX, v.maxX - size.width)),
+                       y: min(max(origin.y, v.minY), max(v.minY, v.maxY - size.height)))
+    }
+
+    /// `screen` is whichever display currently owns the menu bar, so a first
+    /// open lands next to the status item rather than on the other monitor.
+    func show(on screen: NSScreen?) {
+        let size = panel.frame.size
+        var target: NSPoint?
+        var host = screen
+
+        if let saved = UserDefaults.standard.string(forKey: ControlPanel.originKey) {
+            let origin = NSPointFromString(saved)
+            let frame = NSRect(origin: origin, size: size)
+            // A saved origin is honoured only if it still lands on a connected
+            // display — monitors get unplugged.
+            if let onScreen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) }) {
+                target = origin
+                host = onScreen
+            }
+        }
+
+        if target == nil, let v = (screen ?? NSScreen.main)?.visibleFrame {
+            target = NSPoint(x: v.maxX - size.width - 24, y: v.maxY - size.height - 12)
+        }
+
+        if let t = target {
+            panel.setFrameOrigin(clamped(t, size: size, to: host))
+        }
+        panel.orderFrontRegardless()
+    }
+
+    func close() { panel.orderOut(nil) }
+
+    func sync() { for r in rows { r.sync() } }
+}
+
+/// NSButton needs a target/action pair; this keeps closures alive for them.
+@MainActor
+final class ActionProxy: NSObject {
+    static let shared = ActionProxy()
+    private var handlers: [ObjectIdentifier: () -> Void] = [:]
+
+    func register(_ control: NSControl, _ handler: @escaping () -> Void) {
+        handlers[ObjectIdentifier(control)] = handler
+    }
+
+    @objc func fire(_ sender: NSControl) {
+        handlers[ObjectIdentifier(sender)]?()
     }
 }
 
@@ -384,6 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var instances: [Instance] = []
     private var rows: [InstanceRow] = []
     private var statusTimer: Timer?
+    private var controlPanel: ControlPanel?
     static let maxInstances = 6
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -396,18 +615,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         reload()
         requestMicrophoneAccess()
         updateStatusIcon()
+        if config.showPanel == true { setPanelVisible(true) }
 
         // Instances can exit on their own; poll so the icon stays truthful even
         // when the menu is closed and no row is around to refresh itself.
         statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            DispatchQueue.main.async { self.updateStatusIcon() }
+            DispatchQueue.main.async {
+                self.updateStatusIcon()
+                self.controlPanel?.sync()
+            }
         }
     }
 
-    /// The status bar draws a template image with its own tint and ignores
-    /// contentTintColor, so "running" is shown with a palette-coloured,
-    /// non-template copy of the symbol instead. Stopped goes back to the
-    /// template so it follows the menu bar's own light/dark appearance.
+    /// Green while any instance is up, grey otherwise. The status bar draws a
+    /// template image with its own tint and ignores contentTintColor, so both
+    /// states use a palette-coloured, non-template copy of the symbol.
     private var baseIcon: NSImage? {
         NSImage(systemSymbolName: "clock.arrow.2.circlepath",
                 accessibilityDescription: "ab6a-timeShift")
@@ -452,16 +674,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let running = instances.filter { $0.isRunning }.count
 
-        if running > 0 {
-            let green = baseIcon?.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(paletteColors: [.systemGreen]))
-            green?.isTemplate = false
-            button.image = green
-        } else {
-            let plain = baseIcon
-            plain?.isTemplate = true
-            button.image = plain
-        }
+        let tint: NSColor = running > 0 ? .systemGreen : .systemGray
+        let tinted = baseIcon?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(paletteColors: [tint]))
+        tinted?.isTemplate = false
+        button.image = tinted
         button.contentTintColor = nil
         button.toolTip = running > 0
             ? "ab6a-timeShift — \(running) instance\(running == 1 ? "" : "s") running"
@@ -512,7 +729,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func refresh() {
         for r in rows { r.sync() }
+        controlPanel?.sync()
         updateStatusIcon()
+    }
+
+    // MARK: Control panel
+
+    private func panelInstance() -> ControlPanel {
+        if let existing = controlPanel { return existing }
+        let created = ControlPanel(
+            onAddRig:   { [weak self] in self?.addRig() },
+            onStartAll: { [weak self] in self?.startAll() },
+            onStopAll:  { [weak self] in self?.stopAll() })
+        controlPanel = created
+        return created
+    }
+
+    private func rebuildPanel() {
+        guard let panel = controlPanel else { return }
+        panel.rebuild(instances: instances,
+                      range: config.rangeSeconds,
+                      step: config.stepSeconds,
+                      onChange: { [weak self] in self?.refresh() },
+                      onAction: { [weak self] idx, action in
+                          guard let self else { return }
+                          switch action {
+                          case .toggle:    self.toggleInstance(at: idx)
+                          case .configure: self.editRig(at: idx)
+                          case .remove:    self.removeRig(at: idx)
+                          }
+                      })
+        panel.sync()
+    }
+
+    @objc private func toggleControlPanel() {
+        setPanelVisible(!(controlPanel?.isVisible ?? false))
+    }
+
+    private func setPanelVisible(_ visible: Bool) {
+        let panel = panelInstance()
+        if visible {
+            rebuildPanel()
+            panel.show(on: statusItem.button?.window?.screen)
+        } else {
+            panel.close()
+        }
+        config.showPanel = visible
+        Support.saveConfig(config)
     }
 
     // MARK: Instance configuration
@@ -525,6 +788,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             instances.first { $0.config.rigName == cfg.rigName && $0.isRunning }
                 ?? Instance(config: cfg)
         }
+        rebuildPanel()
         refresh()
     }
 
@@ -579,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rigName: finalRig)
     }
 
-    @objc private func addRig() {
+    @objc func addRig() {
         guard config.instances.count < AppDelegate.maxInstances else { return }
         guard let new = promptForInstance(title: "Add Rig", name: "", rigName: "") else { return }
         guard !rigNameTaken(new.rigName, excluding: nil) else {
@@ -676,6 +940,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addItem(menu, "Start All", #selector(startAll))
         addItem(menu, "Stop All", #selector(stopAll))
         menu.addItem(.separator())
+        let panelItem = NSMenuItem(
+            title: (controlPanel?.isVisible ?? false) ? "Hide Control Panel" : "Show Control Panel",
+            action: #selector(toggleControlPanel), keyEquivalent: "")
+        panelItem.target = self
+        menu.addItem(panelItem)
+        menu.addItem(.separator())
+
         let mic = NSMenuItem(title: microphoneStatusText,
                              action: #selector(openMicrophoneSettings), keyEquivalent: "")
         mic.target = self
@@ -704,14 +975,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    @objc private func startAll() {
+    @objc func startAll() {
         for i in instances where !i.isRunning {
             do { try i.start(appConfig: config) } catch { present(error); return }
         }
         refresh()
     }
 
-    @objc private func stopAll() {
+    @objc func stopAll() {
         for i in instances where i.isRunning { i.stop() }
         refresh()
     }
