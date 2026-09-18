@@ -9,4 +9,5 @@ ab6a-timeShift.app/
 
 # Local agent config
 .claude/
-ab6a-timeShift-*.zip
+AB6A-TimeShift-*.zip
+build/

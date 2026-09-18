@@ -14,10 +14,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-APP="ab6a-timeShift.app"
+APP="build/AB6A TimeShift.app"
 PROFILE="${NOTARY_PROFILE:-ab6a-timeshift}"
 VERSION=$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleShortVersionString)
-ZIP="ab6a-timeShift-${VERSION}.zip"
+ZIP="AB6A-TimeShift-${VERSION}.zip"
 
 [ -d "$APP" ] || { echo "no build - run 'make menubar' first" >&2; exit 1; }
 

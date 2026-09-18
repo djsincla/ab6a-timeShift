@@ -58,35 +58,24 @@ clean:
 # ab6a-timeShift — menubar controller
 # ---------------------------------------------------------------------
 
-MENUAPP  = ab6a-timeShift.app
-MENUBIN  = $(MENUAPP)/Contents/MacOS/ab6a-timeShift
+MENUAPP = build/AB6A TimeShift.app
 
-.PHONY: menubar run-menubar clean-menubar
+.PHONY: menubar run-menubar clean-menubar install
 
-menubar: $(MENUBIN)
-
-$(MENUBIN): menubar/main.swift
-	@mkdir -p $(MENUAPP)/Contents/MacOS $(MENUAPP)/Contents/Resources
-	swiftc -swift-version 5 -O -target arm64-apple-macos13.0 \
-	    -framework AppKit -o $@ $<
-	@/usr/libexec/PlistBuddy -c 'Clear dict' \
-	    -c 'Add :CFBundleName string ab6a-timeShift' \
-	    -c 'Add :CFBundleDisplayName string ab6a-timeShift' \
-	    -c 'Add :CFBundleIdentifier string com.ab6a.timeshift' \
-	    -c 'Add :CFBundleExecutable string ab6a-timeShift' \
-	    -c 'Add :CFBundlePackageType string APPL' \
-	    -c 'Add :CFBundleShortVersionString string 1.0' \
-	    -c 'Add :CFBundleVersion string 1' \
-	    -c 'Add :LSMinimumSystemVersion string 13.0' \
-	    -c 'Add :LSUIElement bool true' \
-	    -c 'Add :NSMicrophoneUsageDescription string "WSJT-X instances launched by ab6a-timeShift receive radio audio through your sound card." ' \
-	    -c 'Add :NSHighResolutionCapable bool true' \
-	    $(MENUAPP)/Contents/Info.plist >/dev/null
-	codesign -f -s "$(CODESIGN_ID)" --options runtime --timestamp $(MENUAPP)
-	@echo "built $(MENUAPP)"
+# The bundle name contains a space, which make handles badly in targets, so the
+# assembly lives in build-app.sh.
+menubar:
+	@bash build-app.sh
 
 run-menubar: menubar
-	open $(MENUAPP)
+	@open "$(MENUAPP)"
+
+# Install where Finder and Spotlight expect it.
+install: menubar
+	@pkill -f 'AB6A TimeShift.app/Contents/MacOS' 2>/dev/null || true
+	@rm -rf "/Applications/AB6A TimeShift.app"
+	@ditto "$(MENUAPP)" "/Applications/AB6A TimeShift.app"
+	@echo "installed /Applications/AB6A TimeShift.app"
 
 clean-menubar:
-	rm -rf $(MENUAPP)
+	rm -rf build

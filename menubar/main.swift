@@ -193,14 +193,14 @@ final class Instance {
         let exe = URL(fileURLWithPath: appConfig.wsjtxApp)
             .appendingPathComponent("Contents/MacOS/wsjtx")
         guard FileManager.default.isExecutableFile(atPath: exe.path) else {
-            throw NSError(domain: "ab6a-timeShift", code: 1, userInfo: [
+            throw NSError(domain: "AB6A TimeShift", code: 1, userInfo: [
                 NSLocalizedDescriptionKey:
                     "No WSJT-X executable at \(exe.path).\n\nMake an injectable copy first:\n"
                     + "  bin/timeshift-resign /Applications/wsjtx.app \"\(appConfig.wsjtxApp)\""
             ])
         }
         guard FileManager.default.fileExists(atPath: appConfig.dylib) else {
-            throw NSError(domain: "ab6a-timeShift", code: 2, userInfo: [
+            throw NSError(domain: "AB6A TimeShift", code: 2, userInfo: [
                 NSLocalizedDescriptionKey:
                     "Shim not found at \(appConfig.dylib).\n\nBuild it with `make` in the timeShift project."
             ])
@@ -438,7 +438,7 @@ final class ControlPanel: NSObject, NSWindowDelegate {
                         styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
                         backing: .buffered,
                         defer: false)
-        panel.title = "ab6a-timeShift"
+        panel.title = "AB6A TimeShift"
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
@@ -659,7 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// states use a palette-coloured, non-template copy of the symbol.
     private var baseIcon: NSImage? {
         NSImage(systemSymbolName: "clock.arrow.2.circlepath",
-                accessibilityDescription: "ab6a-timeShift")
+                accessibilityDescription: "AB6A TimeShift")
     }
 
     /// Attaches instances to WSJT-X processes this app did not spawn.
@@ -708,8 +708,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.image = tinted
         button.contentTintColor = nil
         button.toolTip = running > 0
-            ? "ab6a-timeShift — \(running) instance\(running == 1 ? "" : "s") running"
-            : "ab6a-timeShift — stopped"
+            ? "AB6A TimeShift — \(running) instance\(running == 1 ? "" : "s") running"
+            : "AB6A TimeShift — stopped"
     }
 
     /// WSJT-X is launched as a child of this app, so macOS attributes its
@@ -913,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func warn(_ text: String) {
         let alert = NSAlert()
-        alert.messageText = "ab6a-timeShift"
+        alert.messageText = "AB6A TimeShift"
         alert.informativeText = text
         alert.alertStyle = .warning
         alert.runModal()
@@ -925,7 +925,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         rows.removeAll()
 
-        let header = NSMenuItem(title: "ab6a-timeShift", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "AB6A TimeShift", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
@@ -982,7 +982,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addItem(menu, "Edit Configuration…", #selector(editConfig))
         addItem(menu, "Reload Configuration", #selector(reloadConfig))
         menu.addItem(.separator())
-        addItem(menu, "Quit", #selector(quit))
+        addItem(menu, "About AB6A TimeShift\u{2026}", #selector(showAbout))
+        addItem(menu, "Quit AB6A TimeShift", #selector(quit))
     }
 
     private func addItem(_ menu: NSMenu, _ title: String, _ action: Selector) {
@@ -1047,13 +1048,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
+    @objc private func showAbout() {
+        // the standard panel, with slightly larger text than its default
+        let body = NSFont.systemFont(ofSize: 12)
+        let heading = NSFont.boldSystemFont(ofSize: 12)
+        let accent = NSColor(calibratedRed: 0.94, green: 0.55, blue: 0.13, alpha: 1)
+        let credits = NSMutableAttributedString()
+
+        credits.append(NSAttributedString(
+            string: "Runs several WSJT-X instances at once, each on its own clock. "
+                  + "Offsets are adjustable to the nanosecond while the instance is "
+                  + "running, and the rest of the Mac keeps exact time.\n\n",
+            attributes: [.font: body]))
+
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "?"
+        credits.append(NSAttributedString(string: "Versions  ", attributes: [.font: heading]))
+        credits.append(NSAttributedString(
+            string: "AB6A TimeShift \(appVersion)   \u{00B7}   \(wsjtxVersionSummary)\n",
+            attributes: [.font: body]))
+
+        credits.append(NSAttributedString(string: "Help  ", attributes: [.font: heading]))
+        credits.append(NSAttributedString(
+            string: "AB6A.US@gmail.com\n",
+            attributes: [.font: body,
+                         .link: URL(string: "mailto:AB6A.US@gmail.com")!,
+                         .foregroundColor: accent]))
+
+        credits.append(NSAttributedString(string: "Source  ", attributes: [.font: heading]))
+        credits.append(NSAttributedString(
+            string: "github.com/djsincla/ab6a-timeShift\n\n",
+            attributes: [.font: body,
+                         .link: URL(string: "https://github.com/djsincla/ab6a-timeShift")!,
+                         .foregroundColor: accent]))
+
+        credits.append(NSAttributedString(
+            string: "WSJT-X is separate software under its own licence. This app never "
+                  + "modifies your installed copy: timeshift-resign makes an injectable "
+                  + "duplicate alongside it.",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor]))
+
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: credits,
+            NSApplication.AboutPanelOptionKey(rawValue: "ApplicationName"): "AB6A TimeShift",
+        ])
+    }
+
+    /// Reads the version out of the WSJT-X copy the rigs are launched from.
+    private var wsjtxVersionSummary: String {
+        let plist = URL(fileURLWithPath: config.wsjtxApp)
+            .appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let info = try? PropertyListSerialization.propertyList(
+                  from: data, format: nil) as? [String: Any],
+              let version = info["CFBundleShortVersionString"] as? String
+        else { return "WSJT-X copy not found" }
+        return "WSJT-X \(version)"
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
 
     private func present(_ error: Error) {
         let alert = NSAlert()
-        alert.messageText = "ab6a-timeShift"
+        alert.messageText = "AB6A TimeShift"
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         alert.runModal()
