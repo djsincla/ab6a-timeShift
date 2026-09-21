@@ -52,10 +52,11 @@ echo "==> bundle"
 echo "==> signing"
 if [ -n "$SIGN_ID" ]; then
     echo "    $SIGN_ID"
-    codesign -f -s "$SIGN_ID" --options runtime --timestamp "$APP"
+    codesign -f -s "$SIGN_ID" --options runtime --timestamp \
+        --entitlements menubar/entitlements.plist "$APP"
 else
     echo "    ad-hoc (no Developer ID found)"
-    codesign -f -s - "$APP"
+    codesign -f -s - --entitlements menubar/entitlements.plist "$APP"
 fi
 
 echo "==> built $APP"
