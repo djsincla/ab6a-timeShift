@@ -257,6 +257,10 @@ final class InstanceRow: NSView {
     private let onChange: () -> Void
     private let onAction: (Action) -> Void
     private let startButton = NSButton()
+    private var actionsStack = NSStackView()
+
+    /// The narrowest this row can be drawn without its buttons being clipped.
+    var minimumWidth: CGFloat { actionsStack.fittingSize.width + 28 }
     /// External refreshes must not fight a drag in progress.
     private var lastLocalChange = Date.distantPast
 
@@ -271,6 +275,13 @@ final class InstanceRow: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 74))
 
         nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        // The rig name yields first when the panel is narrow; the buttons and
+        // the offset readout must never be the thing that gets clipped.
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.usesSingleLineMode = true
+        nameLabel.maximumNumberOfLines = 1
+        nameLabel.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        valueLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         valueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         valueLabel.alignment = .right
 
@@ -308,7 +319,7 @@ final class InstanceRow: NSView {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let actionsStack = NSStackView(views: [
+        actionsStack = NSStackView(views: [
             startButton,
             actionButton("Config", #selector(configTapped)),
             actionButton("Remove", #selector(removeTapped)),
@@ -360,7 +371,7 @@ final class InstanceRow: NSView {
     func sync() {
         let running = instance.isRunning
         let rig = instance.config.rigName.isEmpty ? "default config" : instance.config.rigName
-        let text = "\(running ? "●" : "○")  \(instance.config.name)  (\(rig)) — \(running ? "running" : "stopped")"
+        let text = "\(running ? "●" : "○")  \(instance.config.name)  (\(rig))"
         let attributed = NSMutableAttributedString(string: text)
         attributed.addAttribute(.foregroundColor,
                                 value: running ? NSColor.systemGreen : NSColor.tertiaryLabelColor,
@@ -369,6 +380,8 @@ final class InstanceRow: NSView {
                                 value: running ? NSColor.labelColor : NSColor.secondaryLabelColor,
                                 range: NSRange(location: 1, length: text.count - 1))
         nameLabel.attributedStringValue = attributed
+        nameLabel.setAccessibilityLabel(
+            "\(instance.config.name), \(rig), \(running ? "running" : "stopped")")
         startButton.title = running ? "Stop" : "Start"
 
         // "Is it really running?" should be answerable without reaching for ps.
@@ -404,6 +417,9 @@ final class ControlPanel: NSObject, NSWindowDelegate {
     private let rowStack = NSStackView()
     private let scroll = NSScrollView()
     private var scrollHeight: NSLayoutConstraint!
+    private var scrollWidth: NSLayoutConstraint!
+    private var rowWidths: [NSLayoutConstraint] = []
+    private var footer = NSStackView()
     private(set) var rows: [InstanceRow] = []
 
     var isVisible: Bool { panel.isVisible }
@@ -442,6 +458,7 @@ final class ControlPanel: NSObject, NSWindowDelegate {
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 200)
+        scrollWidth = scroll.widthAnchor.constraint(equalToConstant: 260)
 
         NSLayoutConstraint.activate([
             rowStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
@@ -449,7 +466,7 @@ final class ControlPanel: NSObject, NSWindowDelegate {
             rowStack.topAnchor.constraint(equalTo: document.topAnchor),
             rowStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            scroll.widthAnchor.constraint(equalToConstant: 392),
+            scrollWidth,
             scrollHeight,
         ])
 
@@ -464,8 +481,8 @@ final class ControlPanel: NSObject, NSWindowDelegate {
             return b
         }
 
-        let footer = NSStackView(views: [
-            footerButton("Add Rig…", onAddRig),
+        footer = NSStackView(views: [
+            footerButton("Add Rig", onAddRig),
             footerButton("Start All", onStartAll),
             footerButton("Stop All", onStopAll),
         ])
@@ -501,29 +518,42 @@ final class ControlPanel: NSObject, NSWindowDelegate {
             view.removeFromSuperview()
         }
         rows.removeAll()
+        rowWidths.removeAll()
 
         for (idx, inst) in instances.enumerated() {
             if idx > 0 {
                 let rule = NSBox()
                 rule.boxType = .separator
                 rowStack.addArrangedSubview(rule)
-                rule.widthAnchor.constraint(equalToConstant: 380).isActive = true
             }
             let row = InstanceRow(instance: inst, range: range, step: step,
                                   onChange: onChange,
                                   onAction: { action in onAction(idx, action) })
             rowStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: 380).isActive = true
+            let w = row.widthAnchor.constraint(equalToConstant: 260)
+            w.isActive = true
+            rowWidths.append(w)
             rows.append(row)
         }
+
+        // As narrow as the content allows: the widest button row wins, or the
+        // footer if that is wider. Nothing is hardcoded, so the width follows
+        // whatever the buttons are actually labelled.
+        let needed = ceil(max(rows.map(\.minimumWidth).max() ?? 0,
+                              footer.fittingSize.width + 20))
+        for c in rowWidths { c.constant = needed }
+        for case let rule as NSBox in rowStack.arrangedSubviews {
+            rule.widthAnchor.constraint(equalToConstant: needed).isActive = true
+        }
+        scrollWidth.constant = needed
         // Grow to fit the rigs, but never past what the screen can show.
         rowStack.layoutSubtreeIfNeeded()
         let wanted = rowStack.fittingSize.height
         let ceiling = (NSScreen.main?.visibleFrame.height ?? 900) - 160
         scrollHeight.constant = max(140, min(wanted, ceiling))
         panel.contentView?.layoutSubtreeIfNeeded()
-        let fitted = panel.contentView?.fittingSize ?? NSSize(width: 404, height: 260)
-        panel.setContentSize(NSSize(width: 404, height: fitted.height))
+        let fitted = panel.contentView?.fittingSize ?? NSSize(width: 260, height: 260)
+        panel.setContentSize(NSSize(width: scrollWidth.constant + 12, height: fitted.height))
     }
 
     /// Only the origin is persisted. The height follows the rig count, so
