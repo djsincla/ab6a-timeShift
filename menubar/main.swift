@@ -254,6 +254,14 @@ final class InstanceRow: NSView {
     private let slider = NSSlider()
     private let instance: Instance
     private let step: Double
+    /// Enough decimals to show the step exactly, and no more: 0.1 gives one
+    /// place, 0.05 or 0.25 give two.
+    private var decimals: Int {
+        (0...3).first { d in
+            let scaled = step * pow(10, Double(d))
+            return abs(scaled - scaled.rounded()) < 1e-9
+        } ?? 3
+    }
     private let onChange: () -> Void
     private let onAction: (Action) -> Void
     private let startButton = NSButton()
@@ -393,7 +401,7 @@ final class InstanceRow: NSView {
             toolTip = "not running"
         }
         let secs = instance.control.offsetSeconds
-        valueLabel.stringValue = String(format: "%+.3f s", secs)
+        valueLabel.stringValue = String(format: "%+.*f s", decimals, secs)
         valueLabel.textColor = secs == 0 ? .secondaryLabelColor : .controlAccentColor
         if Date().timeIntervalSince(lastLocalChange) > 1.0 {
             slider.doubleValue = secs
