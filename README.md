@@ -4,6 +4,11 @@ A per-process clock shim for macOS. Runs a program with its wall clock offset,
 scaled, or pinned to a fixed instant, without touching the system clock and
 without affecting anything else running on the machine.
 
+Documentation, with the WSJT-X background and a worked example:
+<https://djsincla.github.io/ab6a-timeShift/>. Signed and notarized builds of
+the menu bar app are on the
+[releases page](https://github.com/djsincla/ab6a-timeShift/releases).
+
 Resolution is one nanosecond, so sub-second work — a ±5 s window in 0.1 s
 increments, say — is well inside its range, which is ±292 years.
 
