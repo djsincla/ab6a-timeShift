@@ -225,10 +225,13 @@
 <section>
   <div class="wrap">
     <h2>What it does</h2>
-    <p class="lead">macOS keeps one clock for the whole machine, and WSJT-X decodes FT8 against it in
-       15-second slots. When one rig wants its clock moved and nothing else on the Mac does, there is
-       nowhere to put that offset. TimeShift puts it in the process: WSJT-X reads the time you set, and
-       everything else carries on with the real one.</p>
+    <p class="lead">For the longest time I have been running several rigs off one Mac, with every
+       WSJT-X instance sharing the one system clock, and that is fine right up until one of them wants
+       a different clock from the others. macOS gives you a single clock for the whole machine, so the
+       only lever is system time, and the moment you pull it everything else on the box goes with it:
+       the other instances, the log, the lot.</p>
+    <p class="lead">So the offset lives in the process instead. WSJT-X reads the time you set for that
+       instance, and the rest of the Mac carries on with the real one.</p>
     <div class="grid">
       <div class="card">
         <h3>Sub-second, live</h3>
