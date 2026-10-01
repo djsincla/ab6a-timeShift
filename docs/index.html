@@ -185,13 +185,13 @@
     <p class="tag">a different clock for every rig</p>
     <p class="sub">A macOS menu bar app that runs several WSJT-X instances at once, each on its own
        independently adjustable clock.<br>
-       <span style="font-size:13px">Nothing else on the Mac moves &mdash; system time stays exact.</span></p>
+       <span style="font-size:13px">Nothing else on the Mac moves: system time stays exact.</span></p>
 
     <div class="demo">
       <div class="menu">
         <div class="rig on">
           <span class="dot"></span>IC-7760 <span class="sm">rig1</span>
-          <span class="off">&minus;0.400 s</span>
+          <span class="off">&minus;0.4 s</span>
         </div>
         <div class="track"><i style="left:42%"></i></div>
         <div class="btns"><b class="pri">Stop</b><b>Config</b><b>Remove</b></div>
@@ -211,25 +211,29 @@
         <div class="btns"><b class="pri">Start</b><b>Config</b><b>Remove</b></div>
 
         <hr>
-        <div class="act">Add Rig&hellip;</div>
+        <div class="act">Add Rig</div>
         <div class="act">Show Control Panel</div>
         <div class="act dim">Microphone: granted</div>
         <div class="act dim">About AB6A TimeShift&hellip;</div>
         <div class="act dim">Quit AB6A TimeShift</div>
       </div>
     </div>
-    <p class="caption">Two rigs running, each shifted on its own &mdash; the icon turns green while any instance is up.</p>
+    <p class="caption">Two rigs running, each shifted on its own. The icon turns green while any instance is up.</p>
   </div>
 </header>
 
 <section>
   <div class="wrap">
     <h2>What it does</h2>
+    <p class="lead">macOS keeps one clock for the whole machine, and WSJT-X decodes FT8 against it in
+       15-second slots. When one rig wants its clock moved and nothing else on the Mac does, there is
+       nowhere to put that offset. TimeShift puts it in the process: WSJT-X reads the time you set, and
+       everything else carries on with the real one.</p>
     <div class="grid">
       <div class="card">
         <h3>Sub-second, live</h3>
         <p>Offsets are nanosecond integers. Walk a rig &plusmn;5&nbsp;s in 0.1&nbsp;s steps while it
-           runs &mdash; no restart, no touching system time. The slider snaps to exact
+           runs, with no restart and no touching system time. The slider snaps to exact
            0.1&nbsp;s marks.</p>
       </div>
       <div class="card">
@@ -249,8 +253,8 @@
 <section>
   <div class="wrap">
     <h2>Why it matters</h2>
-    <p class="lead">FT8 transmits in 15-second slots. Decodes past roughly &plusmn;2.5&nbsp;s of DT fall
-       off the edge &mdash; which is what a clock a couple of seconds out costs you.</p>
+    <p class="lead">FT8 transmits in 15-second slots, and decodes past roughly &plusmn;2.5&nbsp;s of DT
+       fall off the edge. That is what a clock a couple of seconds out costs you.</p>
 
     <figure class="shot">
       <img src="decodes.png" width="1116" height="756"
@@ -258,7 +262,7 @@
                 +2.4 seconds. After a single offset adjustment, the 161300 cycle reports DT between
                 -0.3 and -1.1 seconds, centred and decoding cleanly.">
       <figcaption>Real traffic on 20&nbsp;m, one adjustment apart. Every decode in the
-        <b>161245</b> cycle lands at DT&nbsp;+1.9 to&nbsp;+2.4 &mdash; right at the edge. One offset
+        <b>161245</b> cycle lands at DT&nbsp;+1.9 to&nbsp;+2.4, right at the edge. One offset
         change later, the <b>161300</b> cycle comes back centred at DT&nbsp;&minus;0.3
         to&nbsp;&minus;1.1. Same band, same rig, same minute.</figcaption>
     </figure>
@@ -267,7 +271,7 @@
 
     <div class="console">
       <div class="console-bar">
-        <span>Band Activity &mdash; 14.074 MHz FT8</span>
+        <span>Band Activity &middot; 14.074 MHz FT8</span>
         <span class="right">rig1 &middot; shim armed</span>
       </div>
       <div class="tbl-scroll">
@@ -300,7 +304,7 @@
   <div class="wrap">
     <h2>How it works</h2>
     <p class="lead">A dylib injected with <code>DYLD_INSERT_LIBRARIES</code>, using dyld's
-       <code>__DATA,__interpose</code> section &mdash; which rewrites bind targets in every loaded
+       <code>__DATA,__interpose</code> section, which rewrites bind targets in every loaded
        image except the one declaring the interpositions, so the library calls the real functions by
        their ordinary names.</p>
     <pre>out = anchor + (in &minus; anchor) &times; rate + offset</pre>
@@ -312,27 +316,31 @@
         <thead><tr><th>Interposed symbol</th><th>Reached by</th></tr></thead>
         <tbody>
           <tr><td><code>gettimeofday</code></td><td>C code, and CoreFoundation's own clock source</td></tr>
-          <tr><td><code>clock_gettime</code></td><td>modern C/C++, Go, Rust, Swift &mdash; CLOCK_REALTIME</td></tr>
+          <tr><td><code>clock_gettime</code></td><td>modern C/C++, Go, Rust, Swift, on CLOCK_REALTIME</td></tr>
           <tr><td><code>clock_gettime_nsec_np</code></td><td>Apple's preferred fast path</td></tr>
           <tr><td><code>time</code></td><td>legacy C</td></tr>
-          <tr><td><code>mach_absolute_time</code>, <code>mach_continuous_time</code></td><td>monotonic clocks, plus approximates &mdash; opt-in only</td></tr>
+          <tr><td><code>mach_absolute_time</code>, <code>mach_continuous_time</code></td><td>monotonic clocks and their approximates, opt-in only</td></tr>
         </tbody>
       </table>
     </div>
     <p class="lead" style="margin-top:16px"><code>NSDate</code>, Swift's <code>Date</code> and
        <code>CFAbsoluteTimeGetCurrent</code> come along transitively, because CoreFoundation reads the
-       clock through <code>gettimeofday</code>. Interposing CF <em>as well</em> double-shifts it &mdash;
-       a real bug this project hit, and removed.</p>
+       clock through <code>gettimeofday</code>. Interposing CF <em>as well</em> double-shifts it, which is
+       a real bug this project hit and removed.</p>
   </div>
 </section>
 
 <section>
   <div class="wrap">
     <h2>Install</h2>
+    <p class="lead">There is a signed and notarized build on the
+       <a href="https://github.com/djsincla/ab6a-timeShift/releases">releases page</a>. Unzip it, drag
+       <b>AB6A TimeShift.app</b> to <code>/Applications</code>, and it opens on a double click. Building
+       it yourself needs the Xcode command line tools, and Pillow if you want the icon regenerated.</p>
     <pre><span class="c"># build the shim, the tools and the menu bar app</span>
 make
 make menubar
-open ab6a-timeShift.app
+open <span class="a">"build/AB6A TimeShift.app"</span>
 
 <span class="c"># make an injectable copy of WSJT-X, once</span>
 bin/timeshift-resign /Applications/wsjtx.app <span class="a">"/Applications/wsjtx shift.app"</span></pre>
@@ -365,14 +373,14 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
           <tr>
             <td>Library validation</td>
             <td>Admits only dylibs signed by the same team, or platform binaries</td>
-            <td>Same team &mdash; or <code>disable-library-validation</code></td>
+            <td>Same team, or <code>disable-library-validation</code></td>
           </tr>
         </tbody>
       </table>
     </div>
     <p class="lead" style="margin-top:16px">With a Developer ID, <code>timeshift-resign</code> signs
        the WSJT-X copy and the shim with one identity. Library validation is then satisfied by the team
-       match, the hardened runtime stays on, and the result is notarizable &mdash; only the
+       match, the hardened runtime stays on, and the result is notarizable; only the
        dyld-environment waiver is needed. Without a certificate it falls back to ad-hoc, drops the
        hardened runtime and disables library validation instead.</p>
     <div class="warn">A stable Developer ID identity also keeps TCC grants from resetting. An ad-hoc
@@ -391,15 +399,17 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
        hands off to launchd, which starts the app in a clean environment where
        <code>DYLD_INSERT_LIBRARIES</code> never arrives.</div>
     <div class="warn"><b>Grant the microphone to the launcher.</b> macOS attributes a child process's
-       microphone request to the responsible process &mdash; the menu bar app, or your terminal &mdash;
-       not to WSJT-X. The menu shows the current grant.</div>
+       microphone request to the responsible process, which is the menu bar app or your terminal, and not
+       WSJT-X. The menu shows the current grant. Builds before 1.2 were missing the
+       <code>audio-input</code> entitlement, so macOS refused the request without ever prompting, and
+       WSJT-X came up deaf.</div>
     <div class="warn"><b>Never <code>tccutil reset</code> the WSJT-X bundle ID.</b> The copy shares it
        with your original install, so you would revoke the working app's permission too.</div>
     <div class="warn"><b>Leave monotonic clocks alone.</b> WSJT-X aligns its 15-second slots off the
        wall clock; shifting <code>mach_absolute_time</code> only perturbs Qt's timers.</div>
     <div class="warn"><b>Your log moves with the clock.</b> ADIF QSO times, PSK Reporter spots and
-       <code>ALL.TXT</code> all record the shifted time. Correcting a wrong clock &mdash; that's the
-       point. Experimenting &mdash; log to a copy.</div>
+       <code>ALL.TXT</code> all record the shifted time. If you are correcting a clock that is genuinely
+       wrong, that is the point of the exercise. If you are experimenting, log to a copy.</div>
   </div>
 </section>
 
@@ -408,11 +418,11 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
     <h2>Limits</h2>
     <p class="lead"><b>Nothing outside the process moves.</b> File timestamps, timer <em>firing</em>,
        log timestamps and certificates checked in other processes all stay on real time.</p>
-    <p class="lead"><b>Offsets jump, they don't slew.</b> Lowering the offset makes the program's wall
+    <p class="lead"><b>Offsets jump rather than slewing.</b> Lowering the offset makes the program's wall
        clock run backwards. For a gradual machine-wide correction, the call you want is
        <code>adjtime(2)</code>.</p>
     <p class="lead"><b>A narrow unshifted window at startup.</b> Clock reads from inside libSystem's own
-       initializers pass through untransformed &mdash; deliberately. That context has no thread-local
+       initializers pass through untransformed, deliberately. That context has no thread-local
        storage, a non-re-entrant <code>os_once</code>, and no malloc zone yet; all three crash a shim
        that tries to do real work there.</p>
   </div>
@@ -420,7 +430,7 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
 
 <footer>
   <div class="wrap">
-    AB6A TimeShift &mdash; a macOS clock shim for weak-signal work<br>
+    AB6A TimeShift, a macOS clock shim for weak-signal work<br>
     arm64 + x86_64 &middot; macOS 13+ &middot;
     <a href="https://github.com/djsincla/ab6a-timeShift">github.com/djsincla/ab6a-timeShift</a><br>
     GPL-2.0-or-later &middot; &copy; 2026 Dwayne Sinclair (AB6A)
@@ -466,7 +476,7 @@ bin/timeshift-ctl nudge /tmp/rig1.ctl <span class="a">--offset</span> 100ms</pre
             + '<td class="dt ' + classify(shown) + '">' + shown.toFixed(1) + "</td>"
             + '<td class="dim">' + d.hz + "</td>"
             + '<td class="msg">'
-            + (lost ? '<span class="dim">&mdash; not decoded &mdash;</span>' : d.msg)
+            + (lost ? '<span class="dim">no decode</span>' : d.msg)
             + "</td></tr>";
     }
     tbody.innerHTML = html;
